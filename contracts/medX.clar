@@ -1,30 +1,227 @@
+;; MedicalEquipment Smart Contract
+;; Enables secure tracking of medical equipment lifecycle and compliance
 
-;; title: medX
-;; version:
-;; summary:
-;; description:
+(define-trait equipment-tracking-trait
+  (
+    (register-equipment (uint uint) (response bool uint))
+    (update-equipment-state (uint uint) (response bool uint))
+    (get-equipment-timeline (uint) (response (list 10 {state: uint, recorded-at: uint}) uint))
+    (add-compliance-record (uint uint principal) (response bool uint))
+    (verify-compliance (uint uint) (response bool uint))
+  )
+)
 
-;; traits
-;;
+;; Define equipment state constants
+(define-constant EQUIP_STATE_PRODUCTION u1)
+(define-constant EQUIP_STATE_QA u2)
+(define-constant EQUIP_STATE_ACTIVE u3)
+(define-constant EQUIP_STATE_SERVICE u4)
 
-;; token definitions
-;;
+;; Define compliance type constants
+(define-constant COMPLIANCE_FDA u1)
+(define-constant COMPLIANCE_EU u2)
+(define-constant COMPLIANCE_ISO13485 u3)
+(define-constant COMPLIANCE_IEC60601 u4)
 
-;; constants
-;;
+;; Error constants
+(define-constant ERR_NOT_AUTHORIZED (err u1))
+(define-constant ERR_INVALID_EQUIPMENT (err u2))
+(define-constant ERR_STATE_UPDATE_FAILED (err u3))
+(define-constant ERR_INVALID_STATE (err u4))
+(define-constant ERR_INVALID_COMPLIANCE (err u5))
+(define-constant ERR_COMPLIANCE_DUPLICATE (err u6))
 
-;; data vars
-;;
+;; Contract administrator
+(define-data-var contract-admin principal tx-sender)
 
-;; data maps
-;;
+;; Event sequence counter
+(define-data-var event-sequence uint u0)
 
-;; public functions
-;;
+;; Equipment tracking map
+(define-map equipment-registry 
+  {equipment-id: uint} 
+  {
+    manufacturer: principal,
+    current-state: uint,
+    timeline: (list 10 {state: uint, recorded-at: uint})
+  }
+)
 
-;; read only functions
-;;
+;; Compliance tracking map
+(define-map equipment-compliance
+  {equipment-id: uint, compliance-type: uint}
+  {
+    authority: principal,
+    recorded-at: uint,
+    active: bool
+  }
+)
 
-;; private functions
-;;
+;; Authorized regulatory authorities
+(define-map regulatory-authorities
+  {entity: principal, compliance-type: uint}
+  {authorized: bool}
+)
 
+;; Get current sequence and increment
+(define-private (get-sequence-number)
+  (begin
+    (var-set event-sequence (+ (var-get event-sequence) u1))
+    (var-get event-sequence)
+  )
+)
+
+;; Only contract admin can perform certain actions
+(define-read-only (is-contract-admin (caller principal))
+  (is-eq caller (var-get contract-admin))
+)
+
+;; Validate equipment state
+(define-private (is-valid-state (state uint))
+  (or 
+    (is-eq state EQUIP_STATE_PRODUCTION)
+    (is-eq state EQUIP_STATE_QA)
+    (is-eq state EQUIP_STATE_ACTIVE)
+    (is-eq state EQUIP_STATE_SERVICE)
+  )
+)
+
+;; Validate compliance type
+(define-private (is-valid-compliance-type (compliance-type uint))
+  (or
+    (is-eq compliance-type COMPLIANCE_FDA)
+    (is-eq compliance-type COMPLIANCE_EU)
+    (is-eq compliance-type COMPLIANCE_ISO13485)
+    (is-eq compliance-type COMPLIANCE_IEC60601)
+  )
+)
+
+;; Validate equipment ID
+(define-private (is-valid-equipment-id (equipment-id uint))
+  (and (> equipment-id u0) (<= equipment-id u999999))
+)
+
+;; Check if sender is authorized authority
+(define-private (is-regulatory-authority (entity principal) (compliance-type uint))
+  (default-to 
+    false
+    (get authorized (map-get? regulatory-authorities {entity: entity, compliance-type: compliance-type}))
+  )
+)
+
+;; Register new equipment
+(define-public (register-equipment (equipment-id uint) (initial-state uint))
+  (begin
+    (asserts! (is-valid-equipment-id equipment-id) ERR_INVALID_EQUIPMENT)
+    (asserts! (is-valid-state initial-state) ERR_INVALID_STATE)
+    (asserts! (or (is-contract-admin tx-sender) (is-eq initial-state EQUIP_STATE_PRODUCTION)) ERR_NOT_AUTHORIZED)
+    
+    (map-set equipment-registry 
+      {equipment-id: equipment-id}
+      {
+        manufacturer: tx-sender,
+        current-state: initial-state,
+        timeline: (list {state: initial-state, recorded-at: (get-sequence-number)})
+      }
+    )
+    (ok true)
+  )
+)
+
+;; Update equipment state
+(define-public (update-equipment-state (equipment-id uint) (new-state uint))
+  (let 
+    (
+      (equipment (unwrap! (map-get? equipment-registry {equipment-id: equipment-id}) ERR_INVALID_EQUIPMENT))
+    )
+    (asserts! (is-valid-equipment-id equipment-id) ERR_INVALID_EQUIPMENT)
+    (asserts! (is-valid-state new-state) ERR_INVALID_STATE)
+    (asserts! 
+      (or 
+        (is-contract-admin tx-sender)
+        (is-eq (get manufacturer equipment) tx-sender)
+      ) 
+      ERR_NOT_AUTHORIZED
+    )
+    
+    (map-set equipment-registry 
+      {equipment-id: equipment-id}
+      (merge equipment 
+        {
+          current-state: new-state,
+          timeline: (unwrap-panic 
+            (as-max-len? 
+              (append (get timeline equipment) {state: new-state, recorded-at: (get-sequence-number)}) 
+              u10
+            )
+          )
+        }
+      )
+    )
+    (ok true)
+  )
+)
+
+;; Add compliance record
+(define-public (add-compliance-record (equipment-id uint) (compliance-type uint))
+  (begin
+    (asserts! (is-valid-equipment-id equipment-id) ERR_INVALID_EQUIPMENT)
+    (asserts! (is-valid-compliance-type compliance-type) ERR_INVALID_COMPLIANCE)
+    (asserts! (is-regulatory-authority tx-sender compliance-type) ERR_NOT_AUTHORIZED)
+    
+    (asserts! 
+      (is-none 
+        (map-get? equipment-compliance {equipment-id: equipment-id, compliance-type: compliance-type})
+      )
+      ERR_COMPLIANCE_DUPLICATE
+    )
+    
+    (map-set equipment-compliance
+      {equipment-id: equipment-id, compliance-type: compliance-type}
+      {
+        authority: tx-sender,
+        recorded-at: (get-sequence-number),
+        active: true
+      }
+    )
+    (ok true)
+  )
+)
+
+;; Verify equipment compliance
+(define-read-only (verify-compliance (equipment-id uint) (compliance-type uint))
+  (let
+    (
+      (compliance-record (unwrap! 
+        (map-get? equipment-compliance {equipment-id: equipment-id, compliance-type: compliance-type})
+        ERR_INVALID_COMPLIANCE
+      ))
+    )
+    (ok (get active compliance-record))
+  )
+)
+
+;; Get equipment timeline
+(define-read-only (get-equipment-timeline (equipment-id uint))
+  (let 
+    (
+      (equipment (unwrap! (map-get? equipment-registry {equipment-id: equipment-id}) ERR_INVALID_EQUIPMENT))
+    )
+    (ok (get timeline equipment))
+  )
+)
+
+;; Get current equipment state
+(define-read-only (get-equipment-state (equipment-id uint))
+  (let 
+    (
+      (equipment (unwrap! (map-get? equipment-registry {equipment-id: equipment-id}) ERR_INVALID_EQUIPMENT))
+    )
+    (ok (get current-state equipment))
+  )
+)
+
+;; Get compliance details
+(define-read-only (get-compliance-details (equipment-id uint) (compliance-type uint))
+  (ok (map-get? equipment-compliance {equipment-id: equipment-id, compliance-type: compliance-type}))
+)
