@@ -188,3 +188,40 @@
   )
 )
 
+;; Verify equipment compliance
+(define-read-only (verify-compliance (equipment-id uint) (compliance-type uint))
+  (let
+    (
+      (compliance-record (unwrap! 
+        (map-get? equipment-compliance {equipment-id: equipment-id, compliance-type: compliance-type})
+        ERR_INVALID_COMPLIANCE
+      ))
+    )
+    (ok (get active compliance-record))
+  )
+)
+
+;; Get equipment timeline
+(define-read-only (get-equipment-timeline (equipment-id uint))
+  (let 
+    (
+      (equipment (unwrap! (map-get? equipment-registry {equipment-id: equipment-id}) ERR_INVALID_EQUIPMENT))
+    )
+    (ok (get timeline equipment))
+  )
+)
+
+;; Get current equipment state
+(define-read-only (get-equipment-state (equipment-id uint))
+  (let 
+    (
+      (equipment (unwrap! (map-get? equipment-registry {equipment-id: equipment-id}) ERR_INVALID_EQUIPMENT))
+    )
+    (ok (get current-state equipment))
+  )
+)
+
+;; Get compliance details
+(define-read-only (get-compliance-details (equipment-id uint) (compliance-type uint))
+  (ok (map-get? equipment-compliance {equipment-id: equipment-id, compliance-type: compliance-type}))
+)
