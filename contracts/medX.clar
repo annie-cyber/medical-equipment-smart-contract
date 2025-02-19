@@ -128,3 +128,63 @@
   )
 )
 
+;; Update equipment state
+(define-public (update-equipment-state (equipment-id uint) (new-state uint))
+  (let 
+    (
+      (equipment (unwrap! (map-get? equipment-registry {equipment-id: equipment-id}) ERR_INVALID_EQUIPMENT))
+    )
+    (asserts! (is-valid-equipment-id equipment-id) ERR_INVALID_EQUIPMENT)
+    (asserts! (is-valid-state new-state) ERR_INVALID_STATE)
+    (asserts! 
+      (or 
+        (is-contract-admin tx-sender)
+        (is-eq (get manufacturer equipment) tx-sender)
+      ) 
+      ERR_NOT_AUTHORIZED
+    )
+    
+    (map-set equipment-registry 
+      {equipment-id: equipment-id}
+      (merge equipment 
+        {
+          current-state: new-state,
+          timeline: (unwrap-panic 
+            (as-max-len? 
+              (append (get timeline equipment) {state: new-state, recorded-at: (get-sequence-number)}) 
+              u10
+            )
+          )
+        }
+      )
+    )
+    (ok true)
+  )
+)
+
+;; Add compliance record
+(define-public (add-compliance-record (equipment-id uint) (compliance-type uint))
+  (begin
+    (asserts! (is-valid-equipment-id equipment-id) ERR_INVALID_EQUIPMENT)
+    (asserts! (is-valid-compliance-type compliance-type) ERR_INVALID_COMPLIANCE)
+    (asserts! (is-regulatory-authority tx-sender compliance-type) ERR_NOT_AUTHORIZED)
+    
+    (asserts! 
+      (is-none 
+        (map-get? equipment-compliance {equipment-id: equipment-id, compliance-type: compliance-type})
+      )
+      ERR_COMPLIANCE_DUPLICATE
+    )
+    
+    (map-set equipment-compliance
+      {equipment-id: equipment-id, compliance-type: compliance-type}
+      {
+        authority: tx-sender,
+        recorded-at: (get-sequence-number),
+        active: true
+      }
+    )
+    (ok true)
+  )
+)
+
